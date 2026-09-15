@@ -1,0 +1,11 @@
+.save-report { margin-top: 18px; }
+.save-link { display: block; margin-top: 18px; color: #176c50; font-weight: 750; text-decoration: none; }
+.report-list { display: grid; gap: 12px; max-width: 850px; }
+.report-list article { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; background: #fff; border: 1px solid #dce5dc; border-radius: 13px; box-shadow: 0 16px 45px rgba(19,38,31,.08); }
+.report-list h2 { font-size: 18px; margin: 0; }
+.report-list p { color: #5c6c65; margin: 3px 0 0; }
+.delete { border: 1px solid #e1caca; background: #fff5f5; color: #8b3030; border-radius: 8px; padding: 8px 12px; }
+.bill-upload { margin-top: 14px; padding: 12px; border: 1px dashed #bfd0c4; border-radius: 10px; background: #f7faf7; }
+.bill-upload input[type=file] { min-height: auto; padding: 7px; background: #fff; }
+.extraction { margin-top: 10px; color: #176c50; font-size: 13px; }
+.extraction p { margin: 3px 0 0; color: #5c6c65; }
