@@ -13,4 +13,24 @@
   });
   const range = document.querySelector('#day-use'), out = document.querySelector('#day-output');
   if (range) range.addEventListener('input', () => out.textContent = `${range.value}%`);
+
+  const assessment = document.querySelector('form.assessment');
+  if (assessment) {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem('solarsense-assessment') || '{}');
+      Object.entries(saved).forEach(([name, value]) => {
+        const fields = assessment.elements.namedItem(name);
+        if (!fields || name === 'csrf_token') return;
+        if (fields instanceof RadioNodeList) Array.from(fields).forEach((field) => { field.checked = field.value === value; });
+        else if (fields.type !== 'file') fields.value = value;
+      });
+      if (saved.day_use && out) out.textContent = `${saved.day_use}%`;
+    } catch (_) { sessionStorage.removeItem('solarsense-assessment'); }
+
+    document.querySelectorAll('a[href="/auth/google"]').forEach((link) => link.addEventListener('click', () => {
+      const values = {};
+      new FormData(assessment).forEach((value, key) => { if (typeof value === 'string' && key !== 'csrf_token') values[key] = value; });
+      sessionStorage.setItem('solarsense-assessment', JSON.stringify(values));
+    }));
+  }
 })();

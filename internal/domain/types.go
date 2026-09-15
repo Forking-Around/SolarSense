@@ -47,6 +47,7 @@ type AssessmentInput struct {
 
 type SolarResource struct {
 	MonthlyPeakSunHours [12]float64
+	Latitude            float64
 	Source, Version     string
 	RetrievedAt         time.Time
 }
@@ -86,12 +87,12 @@ type BillExtraction struct {
 }
 
 type RoofPhotoObservation struct {
-	RoofType           string             `json:"roof_type"`
-	VisibleObstacles   []string           `json:"visible_obstacles"`
+	RoofType            string             `json:"roof_type"`
+	VisibleObstacles    []string           `json:"visible_obstacles"`
 	ObstacleEstimatePct float64            `json:"obstacle_estimate_pct"`
 	PartialShadeVisible bool               `json:"partial_shade_visible"`
-	HasScaleReference  bool               `json:"has_scale_reference"`
-	Confidence         map[string]float64 `json:"confidence"`
+	HasScaleReference   bool               `json:"has_scale_reference"`
+	Confidence          map[string]float64 `json:"confidence"`
 }
 
 type PolicyPack struct {

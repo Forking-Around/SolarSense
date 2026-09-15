@@ -49,7 +49,7 @@ func (n NASAClient) Resource(ctx context.Context, lat, lon float64) (domain.Sola
 		return domain.SolarResource{}, err
 	}
 	months := [...]string{"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"}
-	r := domain.SolarResource{Source: "NASA POWER climatology: ALLSKY_SFC_SW_DWN", Version: "climatology", RetrievedAt: time.Now().UTC()}
+	r := domain.SolarResource{Latitude: lat, Source: "NASA POWER climatology: ALLSKY_SFC_SW_DWN", Version: "climatology", RetrievedAt: time.Now().UTC()}
 	for i, m := range months {
 		v, ok := payload.Properties.Parameter.GHI[m]
 		if !ok || v <= 0 {

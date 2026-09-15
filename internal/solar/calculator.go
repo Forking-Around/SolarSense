@@ -41,26 +41,53 @@ func ZoneUsableSqFt(z domain.RoofZone) float64 {
 	return math.Max(0, z.GrossSqFt*(1-clamp(z.ObstaclePct/100, 0, .85))*.88)
 }
 
-func zoneShadeFactor(s domain.SunlightWindow) float64 {
-	// Approximate daily production share: morning 25%, midday 50%, evening 25%.
-	return clamp(.25*clamp(s.Morning, 0, 1)+.5*clamp(s.Midday, 0, 1)+.25*clamp(s.Evening, 0, 1), .15, 1)
+func monthlyShadeFactor(s domain.SunlightWindow, latitude float64, month int) float64 {
+	day := [...]int{15, 45, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349}[month]
+	decl := 23.45 * math.Sin(2*math.Pi*(284+float64(day))/365) * math.Pi / 180
+	lat := clamp(latitude, -66, 66) * math.Pi / 180
+	weights := [3]float64{}
+	for minute := 6 * 60; minute < 18*60; minute += 10 {
+		hour := float64(minute) / 60
+		hourAngle := (hour - 12) * 15 * math.Pi / 180
+		altitude := math.Asin(math.Sin(lat)*math.Sin(decl) + math.Cos(lat)*math.Cos(decl)*math.Cos(hourAngle))
+		if altitude <= 0 {
+			continue
+		}
+		bucket := 0
+		if hour >= 10 {
+			bucket = 1
+		}
+		if hour >= 14 {
+			bucket = 2
+		}
+		weights[bucket] += math.Sin(altitude)
+	}
+	total := weights[0] + weights[1] + weights[2]
+	if total <= 0 {
+		return .65
+	}
+	return clamp((weights[0]*clamp(s.Morning, 0, 1)+weights[1]*clamp(s.Midday, 0, 1)+weights[2]*clamp(s.Evening, 0, 1))/total, .15, 1)
 }
 
 func Calculate(resource domain.SolarResource, roof domain.RoofProfile, targetKW float64) domain.SolarScenario {
-	var usable, weightedFactor float64
+	var usable float64
 	for _, z := range roof.Zones {
 		u := ZoneUsableSqFt(z)
 		usable += u
-		weightedFactor += u * orientationFactor(z.Orientation, z.TiltDegrees) * zoneShadeFactor(z.Sun)
-	}
-	factor := .80 // balance-of-system performance ratio
-	if usable > 0 {
-		factor *= weightedFactor / usable
 	}
 	capacity := math.Min(targetKW, usable/SqFtPerKW)
 	capacity = math.Floor(capacity*10) / 10
 	s := domain.SolarScenario{CapacityKW: capacity, RequiredSqFt: capacity * SqFtPerKW, UsableSqFt: usable, Confidence: "medium"}
 	for i, psh := range resource.MonthlyPeakSunHours {
+		weightedFactor := 0.0
+		for _, z := range roof.Zones {
+			u := ZoneUsableSqFt(z)
+			weightedFactor += u * orientationFactor(z.Orientation, z.TiltDegrees) * monthlyShadeFactor(z.Sun, resource.Latitude, i)
+		}
+		factor := .80
+		if usable > 0 {
+			factor *= weightedFactor / usable
+		}
 		days := [...]float64{31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}[i]
 		s.MonthlyKWh[i] = capacity * psh * days * factor
 		s.AnnualKWh += s.MonthlyKWh[i]

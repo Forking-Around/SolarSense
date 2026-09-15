@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
@@ -41,16 +43,17 @@ type Server struct {
 	store     store.Supabase
 }
 type pageData struct {
-	Lang          string
-	T             map[string]string
-	Report        *domain.AssessmentReport
-	Error         string
-	Form          map[string]string
-	Months        []string
-	Authenticated bool
-	CSRF          string
-	SavedReports  []store.SavedReport
-	Extraction    *domain.BillExtraction
+	Lang            string
+	T               map[string]string
+	Report          *domain.AssessmentReport
+	Error           string
+	Form            map[string]string
+	Months          []string
+	Authenticated   bool
+	CSRF            string
+	SavedReports    []store.SavedReport
+	Extraction      *domain.BillExtraction
+	RoofObservation *domain.RoofPhotoObservation
 }
 
 func New(cfg config.Config, log *slog.Logger) (*Server, error) {
@@ -59,10 +62,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 			return 0
 		}
 		return int(math.Round(v / max * 100))
-	}, "join": strings.Join, "contains": strings.Contains, "reportToken": func(v domain.AssessmentReport) string {
-		b, _ := json.Marshal(v)
-		return base64.RawURLEncoding.EncodeToString(b)
-	}}
+	}, "join": strings.Join, "contains": strings.Contains, "reportToken": func(v domain.AssessmentReport) string { return signReport(v, cfg.ReportSigningKey) }}
 	t, err := template.New("root").Funcs(funcs).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -82,6 +82,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /auth/google", s.authGoogle)
 	mux.HandleFunc("GET /auth/callback", s.authCallback)
 	mux.HandleFunc("POST /uploads", s.uploadBill)
+	mux.HandleFunc("POST /roof-observations", s.uploadRoof)
 	mux.HandleFunc("POST /reports", s.saveReport)
 	mux.HandleFunc("GET /reports", s.listReports)
 	mux.HandleFunc("POST /reports/{id}/delete", s.deleteReport)
@@ -152,6 +153,9 @@ func (s *Server) assess(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resource := solar.IndiaScreeningResource()
+	if latOK {
+		resource.Latitude = lat
+	}
 	if s.cfg.LiveSolar && latOK && lonOK {
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		defer cancel()
@@ -163,6 +167,10 @@ func (s *Server) assess(w http.ResponseWriter, r *http.Request) {
 	}
 	roof := domain.RoofProfile{Type: r.FormValue("roof_type"), Ownership: r.FormValue("ownership"), Zones: []domain.RoofZone{{Name: "Main roof", GrossSqFt: f(r, "roof_area", 500), ObstaclePct: f(r, "obstacles", 15), Orientation: r.FormValue("orientation"), TiltDegrees: f(r, "tilt", 10), Sun: domain.SunlightWindow{Morning: sun(r.FormValue("morning")), Midday: sun(r.FormValue("midday")), Evening: sun(r.FormValue("evening"))}}}}
 	in := domain.AssessmentInput{Location: domain.LocationContext{Name: place, Country: "India", PostalCode: postal, Utility: r.FormValue("utility"), Latitude: lat, Longitude: lon}, MonthlyBillINR: f(r, "bill", 2500), MonthlyUnitsKWh: f(r, "units", 0), DaytimeUsePct: f(r, "day_use", 45), Roof: roof, Outages: domain.OutageProfile{FrequencyPerMonth: f(r, "outages", 2), HoursPerOutage: f(r, "outage_hours", 1), EssentialWatts: f(r, "essential_watts", 500), DesiredHours: f(r, "backup_hours", 4)}, GridRateINR: f(r, "grid_rate", 8), ExportRateINR: f(r, "export_rate", 2.5), FixedChargeINR: f(r, "fixed_charge", 150), SanctionedLoadKW: f(r, "sanctioned_load", 0)}
+	if err := validateInput(in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	report := engine.Assess(in, resource)
 	report.Solar.PolicyVersion, report.Solar.PolicySourceURL = s.cfg.IndiaPolicyVersion, s.cfg.IndiaPolicySourceURL
 	if resource.Version == "screening-v1" || strings.TrimSpace(in.Location.Utility) == "" || report.Solar.PolicySourceURL == "" {
@@ -181,6 +189,31 @@ func (s *Server) assess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, "index.html", data)
+}
+
+func validateInput(in domain.AssessmentInput) error {
+	if strings.TrimSpace(in.Location.Name) == "" {
+		return fmt.Errorf("enter the installation city, town, or village")
+	}
+	if in.MonthlyBillINR < 0 || in.MonthlyUnitsKWh < 0 {
+		return fmt.Errorf("bill and consumption cannot be negative")
+	}
+	if in.GridRateINR <= 0 || in.ExportRateINR < 0 {
+		return fmt.Errorf("enter valid grid and export rates")
+	}
+	if in.DaytimeUsePct < 0 || in.DaytimeUsePct > 100 {
+		return fmt.Errorf("daytime usage must be between 0 and 100 percent")
+	}
+	if len(in.Roof.Zones) == 0 || in.Roof.Zones[0].GrossSqFt < 30 {
+		return fmt.Errorf("enter at least 30 sq.ft of gross roof area")
+	}
+	if in.Roof.Zones[0].ObstaclePct < 0 || in.Roof.Zones[0].ObstaclePct > 85 {
+		return fmt.Errorf("blocked roof area must be between 0 and 85 percent")
+	}
+	if in.Outages.FrequencyPerMonth < 0 || in.Outages.HoursPerOutage < 0 || in.Outages.EssentialWatts <= 0 || in.Outages.DesiredHours <= 0 {
+		return fmt.Errorf("enter valid power-cut and backup details")
+	}
+	return nil
 }
 
 func (s *Server) authGoogle(w http.ResponseWriter, r *http.Request) {
@@ -202,8 +235,14 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) uploadBill(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
-	if err := r.ParseMultipartForm(10 << 20); err != nil { http.Error(w, "Upload must be 10 MB or smaller.", http.StatusBadRequest); return }
-	if !validCSRF(r) { http.Error(w, "This form expired. Refresh the page and try again.", http.StatusForbidden); return }
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		http.Error(w, "Upload must be 10 MB or smaller.", http.StatusBadRequest)
+		return
+	}
+	if !validCSRF(r) {
+		http.Error(w, "This form expired. Refresh the page and try again.", http.StatusForbidden)
+		return
+	}
 	if _, err := s.auth.User(r.Context(), r); err != nil {
 		http.Error(w, "Sign in before uploading a bill.", http.StatusUnauthorized)
 		return
@@ -221,15 +260,66 @@ func (s *Server) uploadBill(w http.ResponseWriter, r *http.Request) {
 	}
 	detected := http.DetectContentType(data[:min(len(data), 512)])
 	mime := detected
-	if detected != "application/pdf" && detected != "image/jpeg" && detected != "image/png" { http.Error(w, "The file contents are not a JPG, PNG, or PDF.", http.StatusBadRequest); return }
+	if detected != "application/pdf" && detected != "image/jpeg" && detected != "image/png" {
+		http.Error(w, "The file contents are not a JPG, PNG, or PDF.", http.StatusBadRequest)
+		return
+	}
 	result, err := s.extractor.ExtractBill(r.Context(), ai.Document{MIMEType: mime, Data: data})
 	if err != nil {
 		s.log.Warn("bill extraction", "error", err)
 		http.Error(w, "We could not read this bill. Enter the details manually.", 422)
 		return
 	}
-	if r.Header.Get("HX-Request") == "true" { s.render(w, "bill-extraction.html", pageData{Extraction:&result}); return }
-	w.Header().Set("Content-Type", "application/json"); _ = json.NewEncoder(w).Encode(result)
+	if r.Header.Get("HX-Request") == "true" {
+		s.render(w, "bill-extraction.html", pageData{Extraction: &result})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func (s *Server) uploadRoof(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		http.Error(w, "Upload must be 10 MB or smaller.", http.StatusBadRequest)
+		return
+	}
+	if !validCSRF(r) {
+		http.Error(w, "This form expired. Refresh and try again.", http.StatusForbidden)
+		return
+	}
+	if _, err := s.auth.User(r.Context(), r); err != nil {
+		http.Error(w, "Sign in before uploading a roof photo.", http.StatusUnauthorized)
+		return
+	}
+	file, _, err := r.FormFile("roof_file")
+	if err != nil {
+		http.Error(w, "Choose a roof photo.", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 10<<20))
+	if err != nil {
+		http.Error(w, "Could not read upload.", http.StatusBadRequest)
+		return
+	}
+	mime := http.DetectContentType(data[:min(len(data), 512)])
+	if mime != "image/jpeg" && mime != "image/png" {
+		http.Error(w, "Use a JPG or PNG roof photo.", http.StatusBadRequest)
+		return
+	}
+	result, err := s.extractor.ExtractRoof(r.Context(), ai.Document{MIMEType: mime, Data: data})
+	if err != nil {
+		s.log.Warn("roof observation", "error", err)
+		http.Error(w, "We could not inspect this roof photo. Continue with the manual roof answers.", http.StatusUnprocessableEntity)
+		return
+	}
+	if r.Header.Get("HX-Request") == "true" {
+		s.render(w, "roof-observation.html", pageData{RoofObservation: &result})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func (s *Server) saveReport(w http.ResponseWriter, r *http.Request) {
@@ -242,13 +332,8 @@ func (s *Server) saveReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Sign in before saving a report.", http.StatusUnauthorized)
 		return
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(r.FormValue("report"))
-	if err != nil {
-		http.Error(w, "Invalid report.", http.StatusBadRequest)
-		return
-	}
-	var report domain.AssessmentReport
-	if err := json.Unmarshal(raw, &report); err != nil || report.EngineVersion != engine.Version {
+	report, err := verifyReport(r.FormValue("report"), s.cfg.ReportSigningKey)
+	if err != nil || report.EngineVersion != engine.Version {
 		http.Error(w, "This report cannot be saved; calculate it again.", http.StatusBadRequest)
 		return
 	}
@@ -310,6 +395,38 @@ func (s *Server) searchKnowledge(w http.ResponseWriter, r *http.Request) {
 }
 
 func mustToken(r *http.Request) string { v, _ := auth.AccessToken(r); return v }
+
+func signReport(report domain.AssessmentReport, key string) string {
+	body, _ := json.Marshal(report)
+	mac := hmac.New(sha256.New, []byte(key))
+	_, _ = mac.Write(body)
+	return base64.RawURLEncoding.EncodeToString(body) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func verifyReport(token, key string) (domain.AssessmentReport, error) {
+	var report domain.AssessmentReport
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return report, fmt.Errorf("invalid signed report")
+	}
+	body, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return report, err
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return report, err
+	}
+	mac := hmac.New(sha256.New, []byte(key))
+	_, _ = mac.Write(body)
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return report, fmt.Errorf("report signature mismatch")
+	}
+	if err := json.Unmarshal(body, &report); err != nil {
+		return report, err
+	}
+	return report, nil
+}
 
 func ensureCSRF(w http.ResponseWriter, r *http.Request, secure bool) string {
 	if c, err := r.Cookie("solarsense_csrf"); err == nil && len(c.Value) >= 32 {

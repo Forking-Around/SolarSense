@@ -35,3 +35,9 @@ func TestDecodeRejectsInvalidConfidence(t *testing.T) {
 		t.Fatal("expected validation error")
 	}
 }
+
+func TestDecodeRoofRejectsImpossibleObstacleEstimate(t *testing.T) {
+	if _, err := decodeRoof(`{"roof_type":"rcc","obstacle_estimate_pct":120}`); err == nil {
+		t.Fatal("expected roof validation error")
+	}
+}

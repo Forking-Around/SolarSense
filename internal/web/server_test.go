@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Forking-Around/SolarSense/internal/config"
+	"github.com/Forking-Around/SolarSense/internal/domain"
 )
 
 func testHandler(t *testing.T) http.Handler {
@@ -60,5 +61,16 @@ func TestAssessmentReturnsPreliminaryResult(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "Preliminary") {
 		t.Fatal("unverified result was not marked preliminary")
+	}
+}
+
+func TestSignedReportRejectsTampering(t *testing.T) {
+	key := "a-test-key-that-is-long-enough-for-hmac"
+	token := signReport(domain.AssessmentReport{EngineVersion: "0.1.0"}, key)
+	if _, err := verifyReport(token, key); err != nil {
+		t.Fatalf("valid report rejected: %v", err)
+	}
+	if _, err := verifyReport(token+"x", key); err == nil {
+		t.Fatal("tampered report accepted")
 	}
 }

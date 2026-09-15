@@ -19,7 +19,7 @@ func Assess(in domain.AssessmentInput, resource domain.SolarResource) domain.Ass
 	target = math.Ceil(target*10) / 10
 	s := solar.Calculate(resource, in.Roof, target)
 	selfRatio := math.Min(.90, .35+.55*in.DaytimeUsePct/100)
-	s.SelfConsumedKWh = s.AnnualKWh * selfRatio
+	s.SelfConsumedKWh = math.Min(s.AnnualKWh*selfRatio, units*12)
 	s.ExportedKWh = s.AnnualKWh - s.SelfConsumedKWh
 	s.GrossCostINR = s.CapacityKW * 60000
 	s.SubsidyINR = policy.IndiaResidentialSubsidy(s.CapacityKW)

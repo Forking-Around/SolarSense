@@ -56,10 +56,27 @@ func (g Gemini) ExtractBill(ctx context.Context, d Document) (domain.BillExtract
 	return decodeBill(result.Candidates[0].Content.Parts[0].Text)
 }
 func (g Gemini) ExtractRoof(ctx context.Context, d Document) (domain.RoofPhotoObservation, error) {
-	if g.APIKey == "" || g.BaseURL == "" { return domain.RoofPhotoObservation{}, ErrUnavailable }
-	body := map[string]any{"contents": []any{map[string]any{"role":"user","parts":[]any{map[string]any{"text":roofPrompt},map[string]any{"inline_data":map[string]any{"mime_type":d.MIMEType,"data":base64.StdEncoding.EncodeToString(d.Data)}}}}},"generationConfig":map[string]any{"responseMimeType":"application/json"}}
-	var result struct{Candidates []struct{Content struct{Parts []struct{Text string `json:"text"`} `json:"parts"`} `json:"content"`} `json:"candidates"`}
-	endpoint:=fmt.Sprintf("%s/%s:generateContent",strings.TrimRight(g.BaseURL,"/"),g.Model);if err:=postJSON(ctx,g.client(),endpoint,map[string]string{"x-goog-api-key":g.APIKey},body,&result);err!=nil{return domain.RoofPhotoObservation{},err};if len(result.Candidates)==0||len(result.Candidates[0].Content.Parts)==0{return domain.RoofPhotoObservation{},fmt.Errorf("gemini returned no roof observation")};return decodeRoof(result.Candidates[0].Content.Parts[0].Text)
+	if g.APIKey == "" || g.BaseURL == "" {
+		return domain.RoofPhotoObservation{}, ErrUnavailable
+	}
+	body := map[string]any{"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": roofPrompt}, map[string]any{"inline_data": map[string]any{"mime_type": d.MIMEType, "data": base64.StdEncoding.EncodeToString(d.Data)}}}}}, "generationConfig": map[string]any{"responseMimeType": "application/json"}}
+	var result struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+	endpoint := fmt.Sprintf("%s/%s:generateContent", strings.TrimRight(g.BaseURL, "/"), g.Model)
+	if err := postJSON(ctx, g.client(), endpoint, map[string]string{"x-goog-api-key": g.APIKey}, body, &result); err != nil {
+		return domain.RoofPhotoObservation{}, err
+	}
+	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
+		return domain.RoofPhotoObservation{}, fmt.Errorf("gemini returned no roof observation")
+	}
+	return decodeRoof(result.Candidates[0].Content.Parts[0].Text)
 }
 func (g Gemini) client() *http.Client {
 	if g.HTTP != nil {
@@ -99,7 +116,25 @@ func (g Groq) ExtractBill(ctx context.Context, d Document) (domain.BillExtractio
 	return decodeBill(result.Choices[0].Message.Content)
 }
 func (g Groq) ExtractRoof(ctx context.Context, d Document) (domain.RoofPhotoObservation, error) {
-	if g.APIKey==""||g.Endpoint==""{return domain.RoofPhotoObservation{},ErrUnavailable};dataURL:="data:"+d.MIMEType+";base64,"+base64.StdEncoding.EncodeToString(d.Data);body:=map[string]any{"model":g.Model,"temperature":0,"response_format":map[string]string{"type":"json_object"},"messages":[]any{map[string]any{"role":"user","content":[]any{map[string]string{"type":"text","text":roofPrompt},map[string]any{"type":"image_url","image_url":map[string]string{"url":dataURL}}}}}};var result struct{Choices []struct{Message struct{Content string `json:"content"`} `json:"message"`} `json:"choices"`};if err:=postJSON(ctx,g.client(),g.Endpoint,map[string]string{"Authorization":"Bearer "+g.APIKey},body,&result);err!=nil{return domain.RoofPhotoObservation{},err};if len(result.Choices)==0{return domain.RoofPhotoObservation{},fmt.Errorf("groq returned no roof observation")};return decodeRoof(result.Choices[0].Message.Content)
+	if g.APIKey == "" || g.Endpoint == "" {
+		return domain.RoofPhotoObservation{}, ErrUnavailable
+	}
+	dataURL := "data:" + d.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(d.Data)
+	body := map[string]any{"model": g.Model, "temperature": 0, "response_format": map[string]string{"type": "json_object"}, "messages": []any{map[string]any{"role": "user", "content": []any{map[string]string{"type": "text", "text": roofPrompt}, map[string]any{"type": "image_url", "image_url": map[string]string{"url": dataURL}}}}}}
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := postJSON(ctx, g.client(), g.Endpoint, map[string]string{"Authorization": "Bearer " + g.APIKey}, body, &result); err != nil {
+		return domain.RoofPhotoObservation{}, err
+	}
+	if len(result.Choices) == 0 {
+		return domain.RoofPhotoObservation{}, fmt.Errorf("groq returned no roof observation")
+	}
+	return decodeRoof(result.Choices[0].Message.Content)
 }
 func (g Groq) client() *http.Client {
 	if g.HTTP != nil {
@@ -159,8 +194,16 @@ func decodeBill(raw string) (domain.BillExtraction, error) {
 
 func decodeRoof(raw string) (domain.RoofPhotoObservation, error) {
 	var x domain.RoofPhotoObservation
-	if err:=json.Unmarshal([]byte(raw),&x);err!=nil{return x,fmt.Errorf("invalid roof JSON: %w",err)}
-	if x.ObstacleEstimatePct<0||x.ObstacleEstimatePct>100{return x,fmt.Errorf("obstacle estimate outside 0..100")}
-	for k,v:=range x.Confidence{if v<0||v>1{return x,fmt.Errorf("confidence for %s outside 0..1",k)}}
-	return x,nil
+	if err := json.Unmarshal([]byte(raw), &x); err != nil {
+		return x, fmt.Errorf("invalid roof JSON: %w", err)
+	}
+	if x.ObstacleEstimatePct < 0 || x.ObstacleEstimatePct > 100 {
+		return x, fmt.Errorf("obstacle estimate outside 0..100")
+	}
+	for k, v := range x.Confidence {
+		if v < 0 || v > 1 {
+			return x, fmt.Errorf("confidence for %s outside 0..1", k)
+		}
+	}
+	return x, nil
 }

@@ -35,9 +35,19 @@ func (f Fallback) ExtractBill(ctx context.Context, d Document) (domain.BillExtra
 }
 
 func (f Fallback) ExtractRoof(ctx context.Context, d Document) (domain.RoofPhotoObservation, error) {
-	if p, ok := f.Primary.(interface{ ExtractRoof(context.Context, Document) (domain.RoofPhotoObservation, error) }); ok {
-		for range 2 { if v, err := p.ExtractRoof(ctx, d); err == nil { return v, nil } }
+	if p, ok := f.Primary.(interface {
+		ExtractRoof(context.Context, Document) (domain.RoofPhotoObservation, error)
+	}); ok {
+		for range 2 {
+			if v, err := p.ExtractRoof(ctx, d); err == nil {
+				return v, nil
+			}
+		}
 	}
-	if p, ok := f.Secondary.(interface{ ExtractRoof(context.Context, Document) (domain.RoofPhotoObservation, error) }); ok { return p.ExtractRoof(ctx, d) }
+	if p, ok := f.Secondary.(interface {
+		ExtractRoof(context.Context, Document) (domain.RoofPhotoObservation, error)
+	}); ok {
+		return p.ExtractRoof(ctx, d)
+	}
 	return domain.RoofPhotoObservation{}, ErrUnavailable
 }
